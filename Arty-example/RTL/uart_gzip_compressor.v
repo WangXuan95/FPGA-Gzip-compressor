@@ -38,13 +38,16 @@ wire        gz_tlast;
 uart_rx #(
     .CLK_FREQ         ( CLK_FREQ       ),
     .BAUD_RATE        ( UART_BAUD_RATE ),
-    .PARITY           ( "NONE"         )
+    .PARITY           ( "NONE"         ),
+    .FIFO_EA          ( 0              )
 ) u_uart_rx (
     .rstn             ( rstn           ),
     .clk              ( clk            ),
     .i_uart_rx        ( i_uart_rx      ),
+    .o_tready         ( 1'b0           ),
     .o_tvalid         ( rx_tvalid      ),
-    .o_tdata          ( rx_tdata       )
+    .o_tdata          ( rx_tdata       ),
+    .o_overflow       (                )
 );
 
 
@@ -81,6 +84,7 @@ uart_tx #(
     .PARITY           ( "NONE"         ),
     .STOP_BITS        ( 3              ),
     .BYTE_WIDTH       ( 4              ),
+    .FIFO_EA          ( 0              ),
     .EXTRA_BYTE_AFTER_TRANSFER ( ""    ),
     .EXTRA_BYTE_AFTER_PACKET   ( ""    )
 ) u_uart_tx (

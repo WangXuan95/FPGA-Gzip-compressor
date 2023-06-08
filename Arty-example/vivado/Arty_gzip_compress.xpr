@@ -3,7 +3,7 @@
 <!--                                                         -->
 <!-- Copyright 1986-2019 Xilinx, Inc. All Rights Reserved.   -->
 
-<Project Version="7" Minor="40" Path="D:/deflate/FPGA-Gzip-compressor/Arty-example/vivado/Arty_gzip_compress.xpr">
+<Project Version="7" Minor="40" Path="D:/FPGAopensource/DeflateAlgorithm/FPGA-Gzip-compressor/Arty-example/vivado/Arty_gzip_compress.xpr">
   <DefaultLaunch Dir="$PRUNDIR"/>
   <Configuration>
     <Option Name="Id" Val="c09ecdb91f124ef494ab0609ea72e54d"/>

@@ -9,19 +9,23 @@
 
 module uart_rx #(
     // clock frequency
-    parameter  CLK_FREQ                  = 50000000,     // clk frequency, Unit : Hz
+    parameter  CLK_FREQ  = 50000000,     // clk frequency, Unit : Hz
     // UART format
-    parameter  BAUD_RATE                 = 115200,       // Unit : Hz
-    parameter  PARITY                    = "NONE"        // "NONE", "ODD", or "EVEN"
+    parameter  BAUD_RATE = 115200,       // Unit : Hz
+    parameter  PARITY    = "NONE",       // "NONE", "ODD", or "EVEN"
+    // RX fifo depth
+    parameter  FIFO_EA   = 0             // 0:no fifo   1,2:depth=4   3:depth=8   4:depth=16  ...  10:depth=1024   11:depth=2048  ...
 ) (
     input  wire        rstn,
     input  wire        clk,
     // UART RX input signal
     input  wire        i_uart_rx,
     // output AXI-stream master. Associated clock = clk. 
-    // input  wire     o_tready        // Note that TREADY signal is omitted, which means it will not handle situations that the receiver cannot accept data (This is a situation allowed by the AXI-stream specification)
+    input  wire        o_tready,
     output reg         o_tvalid,
-    output reg  [ 7:0] o_tdata
+    output reg  [ 7:0] o_tdata,
+    // report whether there's a overflow
+    output reg         o_overflow
 );
 
 
@@ -32,129 +36,32 @@ module uart_rx #(
 localparam  BAUD_CYCLES      = ( (CLK_FREQ*10*2 + BAUD_RATE) / (BAUD_RATE*2) ) / 10 ;
 localparam  BAUD_CYCLES_FRAC = ( (CLK_FREQ*10*2 + BAUD_RATE) / (BAUD_RATE*2) ) % 10 ;
 
-localparam real IDEAL_BAUD_CYCLES        = (1.0*CLK_FREQ) / (1.0*BAUD_RATE);
-localparam real ACTUAL_BAUD_CYCLES       = (10.0*BAUD_CYCLES + BAUD_CYCLES_FRAC) / 10.0;
-localparam real ACTUAL_BAUD_RATE         = (1.0*CLK_FREQ) / ACTUAL_BAUD_CYCLES;
-localparam real BAUD_RATE_ERROR          = (ACTUAL_BAUD_RATE > 1.0*BAUD_RATE) ? (ACTUAL_BAUD_RATE - 1.0*BAUD_RATE) : (1.0*BAUD_RATE - ACTUAL_BAUD_RATE);
-localparam real BAUD_RATE_RELATIVE_ERROR = BAUD_RATE_ERROR / BAUD_RATE;
-
-
 localparam           HALF_BAUD_CYCLES =  BAUD_CYCLES    / 2;
 localparam  THREE_QUARTER_BAUD_CYCLES = (BAUD_CYCLES*3) / 4;
 
+localparam [9:0] ADDITION_CYCLES = (BAUD_CYCLES_FRAC == 0) ? 10'b0000000000 :
+                                   (BAUD_CYCLES_FRAC == 1) ? 10'b0000010000 :
+                                   (BAUD_CYCLES_FRAC == 2) ? 10'b0010000100 :
+                                   (BAUD_CYCLES_FRAC == 3) ? 10'b0010010010 :
+                                   (BAUD_CYCLES_FRAC == 4) ? 10'b0101001010 :
+                                   (BAUD_CYCLES_FRAC == 5) ? 10'b0101010101 :
+                                   (BAUD_CYCLES_FRAC == 6) ? 10'b1010110101 :
+                                   (BAUD_CYCLES_FRAC == 7) ? 10'b1101101101 :
+                                   (BAUD_CYCLES_FRAC == 8) ? 10'b1101111011 :
+                                  /*BAUD_CYCLES_FRAC == 9)*/ 10'b1111101111 ;
+
 wire [31:0] cycles [9:0];
 
-generate if (BAUD_CYCLES_FRAC == 0) begin
-    assign cycles[0] = BAUD_CYCLES    ;
-    assign cycles[1] = BAUD_CYCLES    ;
-    assign cycles[2] = BAUD_CYCLES    ;
-    assign cycles[3] = BAUD_CYCLES    ;
-    assign cycles[4] = BAUD_CYCLES    ;
-    assign cycles[5] = BAUD_CYCLES    ;
-    assign cycles[6] = BAUD_CYCLES    ;
-    assign cycles[7] = BAUD_CYCLES    ;
-    assign cycles[8] = BAUD_CYCLES    ;
-    assign cycles[9] = BAUD_CYCLES    ;
-end else if (BAUD_CYCLES_FRAC == 1) begin
-    assign cycles[0] = BAUD_CYCLES    ;
-    assign cycles[1] = BAUD_CYCLES    ;
-    assign cycles[2] = BAUD_CYCLES    ;
-    assign cycles[3] = BAUD_CYCLES    ;
-    assign cycles[4] = BAUD_CYCLES + 1;
-    assign cycles[5] = BAUD_CYCLES    ;
-    assign cycles[6] = BAUD_CYCLES    ;
-    assign cycles[7] = BAUD_CYCLES    ;
-    assign cycles[8] = BAUD_CYCLES    ;
-    assign cycles[9] = BAUD_CYCLES    ;
-end else if (BAUD_CYCLES_FRAC == 2) begin
-    assign cycles[0] = BAUD_CYCLES    ;
-    assign cycles[1] = BAUD_CYCLES    ;
-    assign cycles[2] = BAUD_CYCLES + 1;
-    assign cycles[3] = BAUD_CYCLES    ;
-    assign cycles[4] = BAUD_CYCLES    ;
-    assign cycles[5] = BAUD_CYCLES    ;
-    assign cycles[6] = BAUD_CYCLES    ;
-    assign cycles[7] = BAUD_CYCLES + 1;
-    assign cycles[8] = BAUD_CYCLES    ;
-    assign cycles[9] = BAUD_CYCLES    ;
-end else if (BAUD_CYCLES_FRAC == 3) begin
-    assign cycles[0] = BAUD_CYCLES    ;
-    assign cycles[1] = BAUD_CYCLES + 1;
-    assign cycles[2] = BAUD_CYCLES    ;
-    assign cycles[3] = BAUD_CYCLES    ;
-    assign cycles[4] = BAUD_CYCLES + 1;
-    assign cycles[5] = BAUD_CYCLES    ;
-    assign cycles[6] = BAUD_CYCLES    ;
-    assign cycles[7] = BAUD_CYCLES + 1;
-    assign cycles[8] = BAUD_CYCLES    ;
-    assign cycles[9] = BAUD_CYCLES    ;
-end else if (BAUD_CYCLES_FRAC == 4) begin
-    assign cycles[0] = BAUD_CYCLES    ;
-    assign cycles[1] = BAUD_CYCLES + 1;
-    assign cycles[2] = BAUD_CYCLES    ;
-    assign cycles[3] = BAUD_CYCLES + 1;
-    assign cycles[4] = BAUD_CYCLES    ;
-    assign cycles[5] = BAUD_CYCLES    ;
-    assign cycles[6] = BAUD_CYCLES + 1;
-    assign cycles[7] = BAUD_CYCLES    ;
-    assign cycles[8] = BAUD_CYCLES + 1;
-    assign cycles[9] = BAUD_CYCLES    ;
-end else if (BAUD_CYCLES_FRAC == 5) begin
-    assign cycles[0] = BAUD_CYCLES + 1;
-    assign cycles[1] = BAUD_CYCLES    ;
-    assign cycles[2] = BAUD_CYCLES + 1;
-    assign cycles[3] = BAUD_CYCLES    ;
-    assign cycles[4] = BAUD_CYCLES + 1;
-    assign cycles[5] = BAUD_CYCLES    ;
-    assign cycles[6] = BAUD_CYCLES + 1;
-    assign cycles[7] = BAUD_CYCLES    ;
-    assign cycles[8] = BAUD_CYCLES + 1;
-    assign cycles[9] = BAUD_CYCLES    ;
-end else if (BAUD_CYCLES_FRAC == 6) begin
-    assign cycles[0] = BAUD_CYCLES + 1;
-    assign cycles[1] = BAUD_CYCLES    ;
-    assign cycles[2] = BAUD_CYCLES + 1;
-    assign cycles[3] = BAUD_CYCLES    ;
-    assign cycles[4] = BAUD_CYCLES + 1;
-    assign cycles[5] = BAUD_CYCLES + 1;
-    assign cycles[6] = BAUD_CYCLES    ;
-    assign cycles[7] = BAUD_CYCLES + 1;
-    assign cycles[8] = BAUD_CYCLES    ;
-    assign cycles[9] = BAUD_CYCLES + 1;
-end else if (BAUD_CYCLES_FRAC == 7) begin
-    assign cycles[0] = BAUD_CYCLES + 1;
-    assign cycles[1] = BAUD_CYCLES    ;
-    assign cycles[2] = BAUD_CYCLES + 1;
-    assign cycles[3] = BAUD_CYCLES + 1;
-    assign cycles[4] = BAUD_CYCLES    ;
-    assign cycles[5] = BAUD_CYCLES + 1;
-    assign cycles[6] = BAUD_CYCLES + 1;
-    assign cycles[7] = BAUD_CYCLES    ;
-    assign cycles[8] = BAUD_CYCLES + 1;
-    assign cycles[9] = BAUD_CYCLES + 1;
-end else if (BAUD_CYCLES_FRAC == 8) begin
-    assign cycles[0] = BAUD_CYCLES + 1;
-    assign cycles[1] = BAUD_CYCLES + 1;
-    assign cycles[2] = BAUD_CYCLES    ;
-    assign cycles[3] = BAUD_CYCLES + 1;
-    assign cycles[4] = BAUD_CYCLES + 1;
-    assign cycles[5] = BAUD_CYCLES + 1;
-    assign cycles[6] = BAUD_CYCLES + 1;
-    assign cycles[7] = BAUD_CYCLES    ;
-    assign cycles[8] = BAUD_CYCLES + 1;
-    assign cycles[9] = BAUD_CYCLES + 1;
-end else /*if (BAUD_CYCLES_FRAC == 9)*/ begin
-    assign cycles[0] = BAUD_CYCLES + 1;
-    assign cycles[1] = BAUD_CYCLES + 1;
-    assign cycles[2] = BAUD_CYCLES + 1;
-    assign cycles[3] = BAUD_CYCLES + 1;
-    assign cycles[4] = BAUD_CYCLES    ;
-    assign cycles[5] = BAUD_CYCLES + 1;
-    assign cycles[6] = BAUD_CYCLES + 1;
-    assign cycles[7] = BAUD_CYCLES + 1;
-    assign cycles[8] = BAUD_CYCLES + 1;
-    assign cycles[9] = BAUD_CYCLES + 1;
-end endgenerate
+assign cycles[0] = BAUD_CYCLES + (ADDITION_CYCLES[0] ? 1 : 0);
+assign cycles[1] = BAUD_CYCLES + (ADDITION_CYCLES[1] ? 1 : 0);
+assign cycles[2] = BAUD_CYCLES + (ADDITION_CYCLES[2] ? 1 : 0);
+assign cycles[3] = BAUD_CYCLES + (ADDITION_CYCLES[3] ? 1 : 0);
+assign cycles[4] = BAUD_CYCLES + (ADDITION_CYCLES[4] ? 1 : 0);
+assign cycles[5] = BAUD_CYCLES + (ADDITION_CYCLES[5] ? 1 : 0);
+assign cycles[6] = BAUD_CYCLES + (ADDITION_CYCLES[6] ? 1 : 0);
+assign cycles[7] = BAUD_CYCLES + (ADDITION_CYCLES[7] ? 1 : 0);
+assign cycles[8] = BAUD_CYCLES + (ADDITION_CYCLES[8] ? 1 : 0);
+assign cycles[9] = BAUD_CYCLES + (ADDITION_CYCLES[9] ? 1 : 0);
 
 
 
@@ -263,24 +170,24 @@ always @ (posedge clk or negedge rstn)
 
 
 //---------------------------------------------------------------------------------------------------------------------------------------------------------------
-// generate output AXI-stream
+// RX result byte
 //---------------------------------------------------------------------------------------------------------------------------------------------------------------
-initial o_tvalid = 1'b0;
-initial o_tdata  = 8'h0;
+reg       f_tvalid = 1'b0;
+reg [7:0] f_tdata  = 8'h0;
 
 always @ (posedge clk or negedge rstn)
     if (~rstn) begin
-        o_tvalid <= 1'b0;
-        o_tdata  <= 8'h0;
+        f_tvalid <= 1'b0;
+        f_tdata  <= 8'h0;
     end else begin
-        o_tvalid <= 1'b0;
-        o_tdata  <= 8'h0;
+        f_tvalid <= 1'b0;
+        f_tdata  <= 8'h0;
         if (state == S_STOP_BIT) begin
             if ( cycle < THREE_QUARTER_BAUD_CYCLES) begin
             end else begin
                 if ((count1 >= HALF_BAUD_CYCLES) && parity_correct) begin  // stop bit have enough '1', and parity correct
-                    o_tvalid <= 1'b1;
-                    o_tdata  <= rbyte;                                     // received a correct byte, output it
+                    f_tvalid <= 1'b1;
+                    f_tdata  <= rbyte;                                     // received a correct byte, output it
                 end
             end
         end
@@ -289,27 +196,140 @@ always @ (posedge clk or negedge rstn)
 
 
 //---------------------------------------------------------------------------------------------------------------------------------------------------------------
+// RX fifo
+//---------------------------------------------------------------------------------------------------------------------------------------------------------------
+wire f_tready;
+
+generate if (FIFO_EA <= 0) begin          // no RX fifo
+    
+    assign       f_tready = o_tready;
+    always @ (*) o_tvalid = f_tvalid;
+    always @ (*) o_tdata  = f_tdata;
+
+end else begin                            // TX fifo
+
+    localparam        EA     = (FIFO_EA <= 2) ? 2 : FIFO_EA;
+
+    reg  [7:0] buffer [ ((1<<EA)-1) : 0 ];
+
+    localparam [EA:0] A_ZERO = {{EA{1'b0}}, 1'b0};
+    localparam [EA:0] A_ONE  = {{EA{1'b0}}, 1'b1};
+
+    reg  [EA:0] wptr      = A_ZERO;
+    reg  [EA:0] wptr_d1   = A_ZERO;
+    reg  [EA:0] wptr_d2   = A_ZERO;
+    reg  [EA:0] rptr      = A_ZERO;
+    wire [EA:0] rptr_next = (o_tvalid & o_tready) ? (rptr+A_ONE) : rptr;
+
+    assign f_tready = ( wptr != {~rptr[EA], rptr[EA-1:0]} );
+
+    always @ (posedge clk or negedge rstn)
+        if (~rstn) begin
+            wptr    <= A_ZERO;
+            wptr_d1 <= A_ZERO;
+            wptr_d2 <= A_ZERO;
+        end else begin
+            if (f_tvalid & f_tready)
+                wptr <= wptr + A_ONE;
+            wptr_d1 <= wptr;
+            wptr_d2 <= wptr_d1;
+        end
+
+    always @ (posedge clk)
+        if (f_tvalid & f_tready)
+            buffer[wptr[EA-1:0]] <= f_tdata;
+
+    always @ (posedge clk or negedge rstn)
+        if (~rstn) begin
+            rptr <= A_ZERO;
+            o_tvalid <= 1'b0;
+        end else begin
+            rptr <= rptr_next;
+            o_tvalid <= (rptr_next != wptr_d2);
+        end
+
+    always @ (posedge clk)
+        o_tdata <= buffer[rptr_next[EA-1:0]];
+
+    initial o_tvalid = 1'b0;
+    initial o_tdata  = 8'h0;
+end endgenerate
+
+
+
+//---------------------------------------------------------------------------------------------------------------------------------------------------------------
+// detect RX fifo overflow
+//---------------------------------------------------------------------------------------------------------------------------------------------------------------
+initial o_overflow = 1'b0;
+
+always @ (posedge clk or negedge rstn)
+    if (~rstn)
+        o_overflow <= 1'b0;
+    else
+        o_overflow <= (f_tvalid & (~f_tready));
+
+
+
+//---------------------------------------------------------------------------------------------------------------------------------------------------------------
 // parameter checking
 //---------------------------------------------------------------------------------------------------------------------------------------------------------------
 initial begin
-    // print information
-    $display ("uart_rx :                  clock frequency = %10d Hz" , CLK_FREQ                 );
-    $display ("uart_rx :                desired baud rate = %10d Hz" , BAUD_RATE                );
-    $display ("uart_rx :  ideal frequency division factor = %.6f"    , IDEAL_BAUD_CYCLES        );
-    $display ("uart_rx : actual frequency division factor = %.6f"    , ACTUAL_BAUD_CYCLES       );
-    $display ("uart_rx :                 actual baud rate = %.3f Hz" , ACTUAL_BAUD_RATE         );
-    $display ("uart_rx :      relative error of baud rate = %.6f%%"  , BAUD_RATE_RELATIVE_ERROR*100 );
+    if (BAUD_CYCLES < 10) begin $error("invalid parameter : BAUD_CYCLES < 10, please use a faster driving clock"); $stop; end
     
-    if (BAUD_CYCLES < 32) begin
-        $error("*** error : uart_rx : invalid parameter : BAUD_CYCLES < 32, please use a faster driving clock");
-        $stop;
-    end
+    $display("uart_rx :           parity = %s" , PARITY );
+    $display("uart_rx :     clock period = %.0f ns   (%-10d Hz)" , 1000000000.0/CLK_FREQ  , CLK_FREQ );
+    $display("uart_rx : baud rate period = %.0f ns   (%-10d Hz)" , 1000000000.0/BAUD_RATE , BAUD_RATE);
+    $display("uart_rx :      baud cycles = %-10d"    , BAUD_CYCLES );
+    $display("uart_rx : baud cycles frac = %-10d"    , BAUD_CYCLES_FRAC  );
     
-    if ( BAUD_RATE_RELATIVE_ERROR > 0.003 ) begin
-        $error("*** error : uart_tx : relative error of baud rate is too large, please use faster driving clock, or integer multiple of baud rate.");
-        $stop;
+    if (PARITY == "ODD" || PARITY == "EVEN") begin
+        $display("uart_rx :             __      ____ ____ ____ ____ ____ ____ ____ ____________ ");
+        $display("uart_rx :        wave   \\____/____X____X____X____X____X____X____X____X____/   ");
+        $display("uart_rx :        bits   | S  | B0 | B1 | B2 | B3 | B4 | B5 | B6 | B7 | P  |   ");
+        $display("uart_rx : time_points  t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  ");
+        $display("uart_rx :");
+    end else begin
+        $display("uart_rx :             __      ____ ____ ____ ____ ____ ____ ____ _______ ");
+        $display("uart_rx :        wave   \\____/____X____X____X____X____X____X____X____/   ");
+        $display("uart_rx :        bits   | S  | B0 | B1 | B2 | B3 | B4 | B5 | B6 | B7 |   ");
+        $display("uart_rx : time_points  t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   ");
+        $display("uart_rx :");
     end
 end
+
+generate genvar index;
+    for (index=0; index<=9; index=index+1) begin : print_and_check_time
+        localparam cycles_acc = ( (index >= 0) ? (BAUD_CYCLES + (ADDITION_CYCLES[0] ? 1 : 0)) : 0 )
+                              + ( (index >= 1) ? (BAUD_CYCLES + (ADDITION_CYCLES[1] ? 1 : 0)) : 0 )
+                              + ( (index >= 2) ? (BAUD_CYCLES + (ADDITION_CYCLES[2] ? 1 : 0)) : 0 )
+                              + ( (index >= 3) ? (BAUD_CYCLES + (ADDITION_CYCLES[3] ? 1 : 0)) : 0 )
+                              + ( (index >= 4) ? (BAUD_CYCLES + (ADDITION_CYCLES[4] ? 1 : 0)) : 0 )
+                              + ( (index >= 5) ? (BAUD_CYCLES + (ADDITION_CYCLES[5] ? 1 : 0)) : 0 )
+                              + ( (index >= 6) ? (BAUD_CYCLES + (ADDITION_CYCLES[6] ? 1 : 0)) : 0 )
+                              + ( (index >= 7) ? (BAUD_CYCLES + (ADDITION_CYCLES[7] ? 1 : 0)) : 0 )
+                              + ( (index >= 8) ? (BAUD_CYCLES + (ADDITION_CYCLES[8] ? 1 : 0)) : 0 )
+                              + ( (index >= 9) ? (BAUD_CYCLES + (ADDITION_CYCLES[9] ? 1 : 0)) : 0 ) ;
+        
+        localparam real ideal_time_ns  = ((index+1)*1000000000.0/BAUD_RATE);
+        localparam real actual_time_ns = (cycles_acc*1000000000.0/CLK_FREQ);
+        localparam real uncertainty    = (1000000000.0/CLK_FREQ);
+        localparam real error          = ( (ideal_time_ns>actual_time_ns) ? (ideal_time_ns-actual_time_ns) : (-ideal_time_ns+actual_time_ns) ) + uncertainty;
+        localparam real relative_error_percent = (error / (1000000000.0/BAUD_RATE)) * 100.0;
+        
+        initial if (PARITY == "ODD" || PARITY == "EVEN" || index < 9) begin
+            $display("uart_rx : t%-2d- t0 = %.0f ns (ideal)  %.0f +- %.0f ns (actual).   error=%.0f ns   relative_error=%.3f%%" ,
+                (index+1) ,
+                ideal_time_ns ,
+                actual_time_ns,
+                uncertainty,
+                error,
+                relative_error_percent
+            );
+            
+            if ( relative_error_percent > 8.0 ) begin $error("relative_error is too large"); $stop; end   // if relative error larger than 8%
+        end
+    end
+endgenerate
 
 
 endmodule
